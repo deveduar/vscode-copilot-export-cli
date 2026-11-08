@@ -19,7 +19,7 @@ This is an independent community project and is not affiliated with, endorsed by
 Clone the repository, then run from its root. Replace `<URL>` with the repository URL. Python 3.10 or later is required; no third-party packages need to be installed.
 
 ```bash
-git clone "<URL>"
+git clone https://github.com/deveduar/vscode-copilot-export-cli.git
 cd vscode-copilot-exporter
 python3 copilot_export.py
 ```
