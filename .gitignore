@@ -1,0 +1,22 @@
+private.md
+Plan.md
+
+# Python bytecode and local test artefacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+
+# Editor/agent state local to this checkout
+.agents/
+.codex/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Default exporter output: may contain private chat history
+copilot_export/
+archive/
