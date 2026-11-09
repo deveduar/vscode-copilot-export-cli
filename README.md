@@ -16,7 +16,7 @@ This is an independent community project and is not affiliated with, endorsed by
 
 ## Quick start
 
-Clone the repository, then run from its root. Replace `<URL>` with the repository URL. Python 3.10 or later is required; no third-party packages need to be installed.
+Clone the repository, then run from its root. Python 3.10 or later is required; no third-party packages need to be installed.
 
 ```bash
 git clone https://github.com/deveduar/vscode-copilot-export-cli.git
