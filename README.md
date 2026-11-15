@@ -24,7 +24,15 @@ cd vscode-copilot-export-cli
 python3 copilot_export.py
 ```
 
-With no arguments, the exporter checks known VS Code, VS Code Server, code-server, VSCodium, Cursor, and Windsurf profile locations. Each run creates a new, timestamped bundle under `./copilot_export`; existing bundles are never overwritten.
+With no arguments, the exporter checks known VS Code, VS Code Server, code-server, VSCodium, Cursor, and Windsurf profile locations. Each run creates a new, timestamped bundle under `./export`; existing bundles are never overwritten.
+
+Read-only preflight and session listing are available without writing output:
+
+```bash
+python3 copilot_export.py --check --json
+python3 copilot_export.py --list-sessions --json
+python3 copilot_export.py --list-sessions --last 5
+```
 
 For a concise Markdown conversation that keeps prompts, assistant answers, stored reasoning, and inline references while omitting standalone tool output:
 
@@ -83,11 +91,24 @@ python3 copilot_export.py --split-long-sessions --max-session-md-mb 1
 # Preview a run without writing its bundle.
 python3 copilot_export.py --dry-run
 
+# Select sessions before applying content and turn filters.
+python3 copilot_export.py --last 5
+python3 copilot_export.py --sessions id1,id2
+python3 copilot_export.py --since 2026-01-01 --filter "extension"
+python3 copilot_export.py --last 10 --order updated-desc
+
+# Read-only preflight and machine-readable discovery.
+python3 copilot_export.py --check
+python3 copilot_export.py --check --json
+python3 copilot_export.py --list-sessions
+python3 copilot_export.py --list-sessions --json --order created-asc
+python3 copilot_export.py --capabilities --json
+
 # Select a profile, database, or output location.
 python3 copilot_export.py --source /path/to/Code/User
 # A database path also scans its containing directory for related stores.
 python3 copilot_export.py --db "/path/to/Code/User/workspaceStorage/<workspace-hash>/state.vscdb"
-python3 copilot_export.py --output ./my_copilot_export
+python3 copilot_export.py --output ./my_export
 ```
 
 Each run gets a new `<UTC timestamp>_<label>` directory under `--output`; numeric suffixes distinguish runs with the same timestamp and label. Markdown and JSON are written per session; JSONL writes one `history.jsonl` stream per run. `--jsonl-compact` changes the JSONL record layout.
@@ -102,7 +123,7 @@ Each run gets a new `<UTC timestamp>_<label>` directory under `--output`; numeri
 | Turns | All available turns |
 | Truncation | Disabled |
 | Omission notices | Enabled for excluded content |
-| Output | New timestamped bundle under `./copilot_export` |
+| Output | New timestamped bundle under `./export` |
 
 These are export defaults, not a byte-for-byte raw copy of editor storage. The tool reads supported stores, normalizes and merges recognized records, and applies the serialized-reasoning exclusion above. `--label` only names the bundle; `--include-raw-reasoning` includes serialized reasoning, but does not bypass other reading or normalization behavior. This is the most inclusive supported export mode, not a raw database dump:
 
@@ -120,6 +141,14 @@ The exporter reads:
 - Copilot `agentSessionData/<session-id>/session.db` files for stored assistant response parts and tool results.
 - JSONL session files in `chatSessions`, `emptyWindowChatSessions`, and `transferredChatSessions`.
 - `workspace.json` manifests to resolve workspace paths when available.
+
+Discovery order is:
+
+1. An explicit `--db` database path and its containing directory.
+2. An explicit `--source` file or directory. A directory that contains `globalStorage` or `workspaceStorage` is treated as a VS Code `User` directory; other directories are scanned recursively.
+3. Automatic `User` directories for VS Code, VS Code - Insiders, VSCodium, Cursor, Code - OSS, Windsurf, code-server, and VS Code Server, including the adjacent `agentSessionData` directory.
+
+Within a `User` directory, the exporter reads `globalStorage/state.vscdb`, `workspaceStorage/*/state.vscdb`, JSONL files in `chatSessions`, `emptyWindowChatSessions`, and `transferredChatSessions`, plus `agentSessionData/<uuid>/session.db`.
 
 Automatic discovery checks known user-data locations for VS Code, Cursor, Windsurf, VSCodium, and code-server, including the adjacent `agentSessionData` directory. Detection is based on profile paths, not on whether GitHub Copilot is installed. The exporter reads Copilot-compatible data only; it does not export Windsurf's native Cascade conversations. The Windows Windsurf path has a unit test but has not yet been validated against a real Windows installation. macOS live discovery is also not yet validated on a real installation.
 
@@ -146,18 +175,28 @@ The `--conversation` preset selects prompts, answers, and readable stored reason
 
 Excluded tool parts are grouped into inline omission markers by default. `--no-omission-markers` removes those in-message notices; it does not change which content categories are selected, and omission details remain in metadata. Turn-gap notices are unaffected. Omission records use stable message/part indices rather than Markdown line numbers.
 
-Content, turn, and truncation filters are applied before writing, so they affect all selected formats. `--jsonl-compact` changes only the JSONL record layout.
+Content, turn, and truncation filters are applied before writing, so they affect all selected formats. `--jsonl-compact` changes only the JSONL record layout; it requires JSONL output but can be combined with Markdown or per-session JSON (`--format markdown --format json --format jsonl --jsonl-compact`).
 
 Serialized reasoning without readable text is excluded by default; `--include-raw-reasoning` includes it. When omission markers are enabled and reasoning is selected, these exclusions are labeled `serialized_reasoning omitted`. `--max-reasoning-chars` and `--max-tool-output-chars` truncate matching content; `--truncate-direction beginning` keeps the start instead. Truncated structured tool data is emitted as text.
 
 `--turns` accepts positive, one-based turns and ranges, and cannot be combined with `--last-turns`. Turn filtering preserves original turn numbers and places a notice where excluded turns create a gap. `--last-turns N` selects the latest N turns per session.
+
+Session-level selection is separate from turn selection and applies before it:
+
+- `--sessions id1,id2` selects exact session IDs.
+- `--last N` selects the latest N sessions using `--order`.
+- `--since DATE` selects sessions updated on or after an ISO date or timestamp.
+- `--filter TEXT` matches title, workspace, session ID, or source file.
+- `--order` controls session ordering for `--last` and `--list-sessions`; exports always write in chronological order.
+
+Session selection is recorded under `filters.selection` in `metadata.json` and is included in the filter key.
 
 ## Output layouts
 
 Each run gets a timestamped bundle. Markdown and JSON are organized by workspace and session; JSONL is written as one run-wide stream:
 
 ```text
-copilot_export/
+export/
   20261105T145718Z_prompts/
     metadata.json
     2026-11-04__latest-workspace-edit__project-name__short-id/
@@ -178,9 +217,23 @@ JSONL contains typed content-part records with session, turn, role, timestamp, a
 
 Each bundle's `metadata.json` records its run ID and label, sources, formats, filters, output files, content statistics, and reported usage totals and coverage. Usage values come from the source; no token counts or costs are estimated. Repeating an export creates a separate bundle. Timestamps use UTC ISO 8601 format.
 
-- `0`: successful export or dry run.
+`--check` and `--list-sessions` are read-only: they never create `--output`, and their JSON includes `"writes": false`. `--capabilities` does not read sources at all.
+
+Exit codes are stable for automation:
+
+- `0`: successful export, dry run, ready preflight, or non-empty session list.
 - `1`: source discovery, database read, or output write failure.
-- `2`: valid sources were found but no chat records matched the selected filters.
+- `2`: valid sources were found but no records matched, including an empty session selection.
+
+Argument parsing failures also use exit code `2`. When `--json` is used with `--check` or `--list-sessions`, an error object is printed with `"status": "error"` before returning `1`; a no-data result returns `2` with `"status": "no_data"` and a `no_data_reason`.
+
+### Read-only schemas
+
+`--check --json` reports `schema_version`, `tool`, `version`, `ok`, `status`, `source` (resolved path or `"auto"`, existence, origin, and discovered stores), `session_count`, `no_data_reason`, `error`, and `writes`.
+
+`--list-sessions --json` adds `sessions_found` and a `sessions` array. Each session record contains `id`, `title`, `created`, `updated`, `workspace`, `workspace_id`, `agent`, `source`, `source_file`, `message_count`, and `turn_count`.
+
+`--capabilities --json` reports supported content categories, formats, presets, and option requirements without reading local chat data.
 
 ## Verification and roadmap
 
@@ -196,6 +249,8 @@ Tests use synthetic fixtures; they verify parser and discovery behavior but do n
 - [x] Readable workspace/session names with a short collision-safe identifier.
 - [x] Isolated per-run bundles, compact JSONL, progress reporting, and message-safe Markdown splitting.
 - [x] Auto-discover the Windows Windsurf user-data profile for Copilot-compatible storage.
+- [x] Read-only `--check`, `--list-sessions`, and `--capabilities` output with stable JSON.
+- [x] Session-level selection through `--sessions`, `--last`, `--since`, and `--filter`.
 - [ ] Validate Copilot export from a real Windows Windsurf installation; native Cascade conversations are out of scope.
 - [ ] Validate discovery and live reads on a real macOS VS Code installation.
 - [ ] Add anonymized synthetic fixtures for known storage variants, including ambiguous/missing prompt histories and inline-reference shapes.

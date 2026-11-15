@@ -183,6 +183,7 @@ class Session:
     updated_ts: float
     messages: List[Message] = field(default_factory=list)
     source: str = ""
+    source_file: str = ""
     order: int = 0
     usage: List[UsageRecord] = field(default_factory=list)
     selected_turn_count: Optional[int] = field(default=None, repr=False)

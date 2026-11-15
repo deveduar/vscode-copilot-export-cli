@@ -1972,6 +1972,139 @@ class CliTests(unittest.TestCase):
                 )
             self.assertEqual(stdout.getvalue(), "")
 
+    def test_default_output_is_export(self) -> None:
+        self.assertEqual(build_parser().parse_args([]).output, "./export")
+
+    def test_json_requires_a_read_only_command(self) -> None:
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            main(["--json"])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_check_and_list_sessions_are_read_only_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = make_fixture(Path(tmp) / "fixture")
+            output = Path(tmp) / "output"
+            common = [
+                "--source",
+                str(fixture["root"]),
+                "--output",
+                str(output),
+                "--quiet",
+            ]
+
+            check_stdout = io.StringIO()
+            with redirect_stdout(check_stdout):
+                self.assertEqual(main([*common, "--check", "--json"]), EXIT_OK)
+            check = json.loads(check_stdout.getvalue())
+            self.assertEqual(check["tool"], "copilot_export")
+            self.assertEqual(check["status"], "ready")
+            self.assertEqual(check["session_count"], 3)
+            self.assertFalse(check["writes"])
+            self.assertTrue(check["source"]["stores"])
+
+            list_stdout = io.StringIO()
+            with redirect_stdout(list_stdout):
+                self.assertEqual(
+                    main([*common, "--list-sessions", "--json"]), EXIT_OK
+                )
+            listing = json.loads(list_stdout.getvalue())
+            self.assertEqual(listing["sessions_found"], 3)
+            self.assertFalse(listing["writes"])
+            self.assertTrue(
+                all(record["source_file"] for record in listing["sessions"])
+            )
+
+            last_stdout = io.StringIO()
+            with redirect_stdout(last_stdout):
+                self.assertEqual(
+                    main([*common, "--list-sessions", "--json", "--last", "1"]),
+                    EXIT_OK,
+                )
+            self.assertEqual(
+                json.loads(last_stdout.getvalue())["sessions_found"], 1
+            )
+
+            filter_stdout = io.StringIO()
+            with redirect_stdout(filter_stdout):
+                self.assertEqual(
+                    main(
+                        [
+                            *common,
+                            "--list-sessions",
+                            "--json",
+                            "--filter",
+                            "Indexed",
+                        ]
+                    ),
+                    EXIT_OK,
+                )
+            filtered = json.loads(filter_stdout.getvalue())
+            self.assertEqual(filtered["sessions_found"], 1)
+            self.assertEqual(
+                filtered["sessions"][0]["id"],
+                "bbbbbbbb-1111-2222-3333-444444444444",
+            )
+
+            self.assertFalse(output.exists())
+
+    def test_check_reports_no_data_and_capabilities_are_machine_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = Path(tmp) / "empty" / "workspaceStorage" / "hash"
+            connection = create_item_table(empty / "state.vscdb")
+            connection.commit()
+            connection.close()
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                self.assertEqual(
+                    main(["--source", str(empty), "--check", "--json", "--quiet"]),
+                    EXIT_NO_DATA,
+                )
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["status"], "no_data")
+            self.assertEqual(payload["session_count"], 0)
+            self.assertFalse(payload["writes"])
+
+            capabilities_stdout = io.StringIO()
+            with redirect_stdout(capabilities_stdout):
+                self.assertEqual(
+                    main(["--capabilities", "--json"]), EXIT_OK
+                )
+            capabilities = json.loads(capabilities_stdout.getvalue())
+            self.assertEqual(
+                set(capabilities["presets"]), {"conversation", "full"}
+            )
+            self.assertIn("jsonl", capabilities["formats"])
+            self.assertFalse(capabilities["writes"])
+
+    def test_session_selection_applies_to_export_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = make_fixture(Path(tmp) / "fixture")
+            output = Path(tmp) / "output"
+            self.assertEqual(
+                main(
+                    [
+                        "--source",
+                        str(fixture["root"]),
+                        "--output",
+                        str(output),
+                        "--last",
+                        "1",
+                        "--quiet",
+                    ]
+                ),
+                EXIT_OK,
+            )
+            bundle = first_bundle(output)
+            metadata = json.loads(
+                (bundle / "metadata.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(metadata["total_sessions"], 1)
+            self.assertEqual(metadata["filters"]["selection"]["last"], 1)
+            self.assertEqual(
+                metadata["filters"]["selection"]["order"], "updated-desc"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

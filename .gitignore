@@ -15,7 +15,7 @@ htmlcov/
 Thumbs.db
 
 # Default exporter output: may contain private chat history
-copilot_export/
+/export/
 
 # Miscellaneous
 archive/

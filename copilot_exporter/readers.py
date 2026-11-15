@@ -51,6 +51,7 @@ class PromptHistory:
     prompts: List[str] = field(default_factory=list)
     created_ts: Optional[float] = None
     key: str = ""
+    source_file: str = ""
 
 
 @dataclass
@@ -710,6 +711,8 @@ def read_jsonl_sessions(path: Path, workspace: Workspace) -> List[Session]:
         fallback_id=path.stem,
         fallback_ts=fallback_ts,
     )
+    if session is not None:
+        session.source_file = str(path)
     return [session] if session else []
 
 
@@ -898,6 +901,7 @@ def session_from_prompt_history(
         updated_ts=updated_ts,
         messages=messages,
         source="sqlite",
+        source_file=history.source_file,
     )
 
 
@@ -1088,6 +1092,7 @@ def read_agent_session(
         updated_ts=max((message.sort_key for message in messages), default=created_ts),
         messages=messages,
         source="agentSessionData",
+        source_file=str(path),
     )
     if not session.title:
         session.title = guess_title(session.messages, fallback="untitled")

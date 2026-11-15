@@ -72,6 +72,10 @@ def _merge_session(target: Session, incoming: Session) -> None:
         target.title = incoming.title
     if incoming.agent and incoming.agent != "GitHub.copilot-chat":
         target.agent = incoming.agent
+    if not target.source_file and incoming.source_file:
+        target.source_file = incoming.source_file
+    if not target.source and incoming.source:
+        target.source = incoming.source
 
 
 def _apply_meta(session: Session, meta: SessionMeta) -> None:
@@ -210,7 +214,11 @@ def assemble(
         )
         metas[source.workspace.workspace_id].update(extraction.index)
         for session in extraction.sessions:
+            if not session.source_file:
+                session.source_file = str(source.path)
             add(session)
+        for history in extraction.prompt_histories:
+            history.source_file = str(source.path)
         prompt_histories[source.workspace.workspace_id].extend(extraction.prompt_histories)
 
     agent_sessions_by_workspace = defaultdict(list)
