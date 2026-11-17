@@ -454,6 +454,7 @@ def _list_payload(
                 "title": session.title,
                 "created": session.created_at,
                 "updated": session.updated_at,
+                "revision": int(session.updated_ts * 1_000_000),
                 "workspace": _workspace_label(session, workspaces),
                 "workspace_id": session.workspace_id,
                 "agent": session.agent or None,
