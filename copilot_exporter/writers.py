@@ -101,8 +101,8 @@ def _workspace_folders(
             latest[session.workspace_id] = session
     return {
         workspace_id: (
-            f"{session.updated_at[:10]}__{_workspace_name(workspace_id, workspaces)}"
-            f"__{safe_component(workspace_id, 8)}"
+            f"{session.updated_at[:10]}_{_workspace_name(workspace_id, workspaces)}"
+            f"_{safe_component(workspace_id, 8)}"
         )
         for workspace_id, session in latest.items()
     }
@@ -110,7 +110,7 @@ def _workspace_folders(
 
 def build_base_name(session: Session) -> str:
     title = safe_component(session.title, 80)
-    return f"{_session_date(session)}__{title}"
+    return f"{_session_date(session)}_{title}"
 
 
 def _workspace_label(session: Session, workspaces: Dict[str, Any]) -> str:

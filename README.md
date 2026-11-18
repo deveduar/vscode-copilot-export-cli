@@ -199,9 +199,9 @@ Each run gets a timestamped bundle. Markdown and JSON are organized by workspace
 export/
   20261105T145718Z_prompts/
     metadata.json
-    2026-11-04__latest-workspace-edit__project-name__short-id/
-      2026-11-04__session-title.md
-      2026-11-04__session-title.json
+    2026-11-04_latest-workspace-edit_project-name_short-id/
+      2026-11-04_session-title.md
+      2026-11-04_session-title.json
     history.jsonl
 ```
 
