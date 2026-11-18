@@ -231,7 +231,7 @@ Argument parsing failures also use exit code `2`. When `--json` is used with `--
 
 `--check --json` reports `schema_version`, `tool`, `version`, `ok`, `status`, `source` (resolved path or `"auto"`, existence, origin, and discovered stores), `session_count`, `no_data_reason`, `error`, and `writes`.
 
-`--list-sessions --json` adds `sessions_found` and a `sessions` array. Each session record contains `id`, `title`, `created`, `updated`, `revision`, `workspace`, `workspace_id`, `agent`, `source`, `source_file`, `message_count`, and `turn_count`. `revision` is derived from the session's `updated_ts` and is intended for change-aware launchers; use the human-readable `updated` field for display. It is a listing field, not a new per-session field in the export bundle's `metadata.json`.
+`--list-sessions --json` adds `sessions_found` and a `sessions` array. Each session record contains `id`, `title`, `created`, `updated`, canonical UTC `created_at` and `updated_at`, `revision`, `workspace`, `workspace_id`, `agent`, `source`, `source_file`, `message_count`, and `turn_count`. `created`/`updated` remain compatibility aliases. `revision` is derived from the session's `updated_ts` and is intended for change-aware launchers; use `updated_at` for display and ordering. It is a listing field, not a per-session field in the export bundle's `metadata.json`. The bundle metadata records canonical `created_at` and `updated_at` values in `session_records`. Session filenames use their UTC last-updated date as a prefix; run folders use UTC `YYYYMMDDTHHMMSSZ` stamps.
 
 `--capabilities --json` reports supported content categories, formats, presets, and option requirements without reading local chat data.
 

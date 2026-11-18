@@ -65,7 +65,7 @@ def safe_component(text: str, limit: int = 80) -> str:
 
 
 def _session_date(session: Session) -> str:
-    return session.created_at[:10]
+    return session.updated_at[:10] or session.created_at[:10]
 
 
 def _workspace_name(workspace_id: str, workspaces: Dict[str, Any]) -> str:
@@ -628,6 +628,14 @@ def write_metadata(
         },
         "output_dir": str(output),
         "sources": options.sources,
+        "session_records": [
+            {
+                "id": session.session_id,
+                "created_at": session.created_at,
+                "updated_at": session.updated_at,
+            }
+            for session in sessions
+        ],
         "session_files": result.session_files,
         "written_files": result.written_files,
         "workspaces": {
