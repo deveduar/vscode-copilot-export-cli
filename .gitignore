@@ -14,9 +14,5 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Default exporter output: may contain private chat history
+# Default exporter output
 /export/
-
-# Miscellaneous
-archive/
-private.md
