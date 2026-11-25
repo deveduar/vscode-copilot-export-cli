@@ -1412,10 +1412,10 @@ class CliTests(unittest.TestCase):
             self.assertGreaterEqual(len(json_files), 3)
             self.assertGreaterEqual(len(md_files), 3)
             self.assertTrue(
-                any(path.name == "2023-11-14__project__abcdef01" for path in bundle.iterdir())
+                any(path.name == "2023-11-14_project_abcdef01" for path in bundle.iterdir())
             )
             self.assertTrue(
-                any(path.name == "2023-11-14__Indexed project chat.md" for path in md_files)
+                any(path.name == "2023-11-14_Indexed project chat.md" for path in md_files)
             )
 
             markdown = next(
@@ -1681,6 +1681,8 @@ class CliTests(unittest.TestCase):
             )
             bundle = first_bundle(output)
             self.assertTrue((bundle / "history.jsonl").is_file())
+            self.assertFalse((bundle / "corpus.jsonl").exists())
+            self.assertFalse((bundle / "memory.jsonl").exists())
             self.assertFalse(
                 [
                     path
@@ -1867,6 +1869,419 @@ class CliTests(unittest.TestCase):
             self.assertTrue(all("title" not in record for record in parts))
             self.assertTrue(all("workspace" not in record for record in parts))
 
+    def test_format_choices_and_compact_validation(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            ["--format", "jsonl", "--format", "corpus", "--format", "memory"]
+        )
+        self.assertEqual(args.formats, ["jsonl", "corpus", "memory"])
+        self.assertTrue(
+            parser.parse_args(["--format", "corpus", "--jsonl-compact"]).jsonl_compact
+        )
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            parser.parse_args(["--format", "archive"])
+        self.assertEqual(error.exception.code, 2)
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            main(["--source", "unused", "--format", "memory", "--jsonl-compact"])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_corpus_only_writes_flat_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = make_fixture(Path(tmp) / "fixture")
+            output = Path(tmp) / "output"
+            self.assertEqual(
+                main(
+                    [
+                        "--source",
+                        str(fixture["root"]),
+                        "--output",
+                        str(output),
+                        "--format",
+                        "corpus",
+                        "--quiet",
+                    ]
+                ),
+                EXIT_OK,
+            )
+            bundle = first_bundle(output)
+            self.assertTrue((bundle / "corpus.jsonl").is_file())
+            self.assertFalse((bundle / "history.jsonl").exists())
+            self.assertFalse((bundle / "memory.jsonl").exists())
+            records = [
+                json.loads(line)
+                for line in (bundle / "corpus.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(len({record["session_id"] for record in records}), 3)
+            self.assertTrue(all("turn" in record for record in records))
+            self.assertTrue(all("content_type" in record for record in records))
+            metadata = json.loads((bundle / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["formats"], ["corpus"])
+            self.assertIn("corpus.jsonl", metadata["written_files"])
+            self.assertTrue(
+                all(
+                    "corpus.jsonl" in files
+                    for files in metadata["session_files"].values()
+                )
+            )
+
+    def test_memory_only_writes_one_record_per_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = make_fixture(Path(tmp) / "fixture")
+            output = Path(tmp) / "output"
+            self.assertEqual(
+                main(
+                    [
+                        "--source",
+                        str(fixture["root"]),
+                        "--output",
+                        str(output),
+                        "--format",
+                        "memory",
+                        "--quiet",
+                    ]
+                ),
+                EXIT_OK,
+            )
+            bundle = first_bundle(output)
+            self.assertTrue((bundle / "memory.jsonl").is_file())
+            self.assertFalse((bundle / "history.jsonl").exists())
+            self.assertFalse((bundle / "corpus.jsonl").exists())
+            records = [
+                json.loads(line)
+                for line in (bundle / "memory.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(len(records), 3)
+            self.assertEqual(
+                len({record["session_id"] for record in records}), 3
+            )
+            self.assertTrue(
+                all(record["record_type"] == "session" for record in records)
+            )
+            self.assertTrue(all(record["subagents"] == [] for record in records))
+            metadata = json.loads((bundle / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["formats"], ["memory"])
+            self.assertIn("memory.jsonl", metadata["written_files"])
+            self.assertTrue(
+                all(
+                    "memory.jsonl" in files
+                    for files in metadata["session_files"].values()
+                )
+            )
+            by_id = {record["session_id"]: record for record in records}
+            project = by_id[fixture["session_id"]]
+            self.assertEqual(project["title"], "Indexed project chat")
+            self.assertEqual(project["created_at"], "2023-11-14T22:15:00Z")
+            self.assertEqual(
+                project["workspace"], metadata["workspaces"][project["workspace_id"]]
+            )
+            self.assertEqual(
+                [message["role"] for message in project["messages"]],
+                ["user", "assistant", "user", "assistant"],
+            )
+            self.assertEqual(project["messages"][0]["content"], "First question")
+            self.assertEqual(project["messages"][0]["parts"][0]["type"], "prompt")
+            self.assertEqual(project["usage"], [])
+
+    def test_memory_session_selection_controls_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = make_fixture(Path(tmp) / "fixture")
+            cases = (
+                (
+                    "sessions",
+                    [
+                        "--sessions",
+                        f"{fixture['global_id']},{fixture['session_id']}",
+                    ],
+                    {fixture["global_id"], fixture["session_id"]},
+                ),
+                ("last", ["--last", "1"], {fixture["agent_session_id"]}),
+                (
+                    "since",
+                    ["--since", "2023-11-14T22:16:00Z"],
+                    {fixture["session_id"], fixture["agent_session_id"]},
+                ),
+                ("filter", ["--filter", "Indexed"], {fixture["session_id"]}),
+            )
+            for name, selection_args, expected in cases:
+                output = Path(tmp) / name
+                self.assertEqual(
+                    main(
+                        [
+                            "--source",
+                            str(fixture["root"]),
+                            "--output",
+                            str(output),
+                            "--format",
+                            "memory",
+                            *selection_args,
+                            "--quiet",
+                        ]
+                    ),
+                    EXIT_OK,
+                )
+                bundle = first_bundle(output)
+                records = [
+                    json.loads(line)
+                    for line in (bundle / "memory.jsonl")
+                    .read_text(encoding="utf-8")
+                    .splitlines()
+                ]
+                self.assertEqual(len(records), len(expected))
+                self.assertEqual(
+                    {record["session_id"] for record in records}, expected
+                )
+                self.assertTrue(
+                    all(record["record_type"] == "session" for record in records)
+                )
+                metadata = json.loads(
+                    (bundle / "metadata.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(metadata["total_sessions"], len(expected))
+
+    def test_memory_record_preserves_messages_parts_and_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            first = _request(1, "Question one", "Answer one", 1700000001000)
+            first["result"] = {
+                "metadata": {
+                    "summary": {
+                        "usage": {
+                            "prompt_tokens": 10,
+                            "completion_tokens": 4,
+                            "total_tokens": 14,
+                            "completion_tokens_details": {"reasoning_tokens": 2},
+                        }
+                    }
+                }
+            }
+            second = _request(2, "Question two", "Answer two", 1700000002000)
+            second["result"] = {"metadata": {"promptTokens": 7, "outputTokens": 3}}
+            write_jsonl(path, "usage-session", [first, second])
+            output = Path(tmp) / "output"
+            self.assertEqual(
+                main(
+                    [
+                        "--source",
+                        str(path),
+                        "--output",
+                        str(output),
+                        "--format",
+                        "memory",
+                        "--quiet",
+                    ]
+                ),
+                EXIT_OK,
+            )
+            records = [
+                json.loads(line)
+                for line in (first_bundle(output) / "memory.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(len(records), 1)
+            record = records[0]
+            self.assertEqual(record["record_type"], "session")
+            self.assertEqual(record["subagents"], [])
+            self.assertEqual(record["created_at"], "2023-11-14T22:13:20Z")
+            self.assertEqual(
+                [message["role"] for message in record["messages"]],
+                ["user", "assistant", "user", "assistant"],
+            )
+            self.assertEqual(
+                [message["content"] for message in record["messages"]][::2],
+                ["Question one", "Question two"],
+            )
+            assistant = record["messages"][1]
+            self.assertEqual(
+                [part["type"] for part in assistant["parts"]],
+                ["answer", "reasoning", "tool_call", "tool_result"],
+            )
+            self.assertIn("Answer one", assistant["parts"][0]["content"])
+            self.assertIn("private reasoning", assistant["parts"][1]["content"])
+            self.assertEqual(
+                [usage["turn"] for usage in record["usage"]], [1, 2]
+            )
+            self.assertEqual(
+                record["usage"][0]["fields"]["input_tokens"]["value"], 10
+            )
+            self.assertEqual(
+                record["usage"][0]["fields"]["reasoning_tokens"]["value"], 2
+            )
+            self.assertEqual(
+                record["usage"][0]["fields"]["total_tokens"]["value"], 14
+            )
+            self.assertEqual(record["usage"][1]["completeness"], "partial")
+
+    def test_combined_formats_write_all_products(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = make_fixture(Path(tmp) / "fixture")
+            output = Path(tmp) / "output"
+            self.assertEqual(
+                main(
+                    [
+                        "--source",
+                        str(fixture["root"]),
+                        "--output",
+                        str(output),
+                        "--format",
+                        "markdown",
+                        "--format",
+                        "json",
+                        "--format",
+                        "jsonl",
+                        "--format",
+                        "corpus",
+                        "--format",
+                        "memory",
+                        "--quiet",
+                    ]
+                ),
+                EXIT_OK,
+            )
+            bundle = first_bundle(output)
+            for filename in ("history.jsonl", "corpus.jsonl", "memory.jsonl"):
+                self.assertTrue((bundle / filename).is_file())
+            self.assertEqual(len(list(bundle.rglob("*.md"))), 3)
+            session_json_files = [
+                path
+                for path in bundle.rglob("*.json")
+                if path.name != "metadata.json"
+            ]
+            self.assertEqual(len(session_json_files), 3)
+            metadata = json.loads((bundle / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                metadata["formats"], ["md", "json", "jsonl", "corpus", "memory"]
+            )
+            for files in metadata["session_files"].values():
+                self.assertTrue(
+                    all(
+                        filename in files
+                        for filename in ("history.jsonl", "corpus.jsonl", "memory.jsonl")
+                    )
+                )
+                self.assertTrue(any(path.endswith(".md") for path in files))
+                self.assertTrue(any(path.endswith(".json") for path in files))
+
+    def test_filters_apply_to_corpus_and_memory_products(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            write_jsonl(
+                path,
+                "filter-session",
+                [
+                    _request(1, "First question", "First answer", 1700000001000),
+                    _request(2, "Second question", "Second answer", 1700000002000),
+                ],
+            )
+            output = Path(tmp) / "output"
+            self.assertEqual(
+                main(
+                    [
+                        "--source",
+                        str(path),
+                        "--output",
+                        str(output),
+                        "--format",
+                        "corpus",
+                        "--format",
+                        "memory",
+                        "--turns",
+                        "2",
+                        "--content",
+                        "prompts",
+                        "--content",
+                        "tool-results",
+                        "--max-tool-output-chars",
+                        "60",
+                        "--quiet",
+                    ]
+                ),
+                EXIT_OK,
+            )
+            bundle = first_bundle(output)
+            corpus_records = [
+                json.loads(line)
+                for line in (bundle / "corpus.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual({record["turn"] for record in corpus_records}, {2})
+            self.assertEqual(
+                {record["content_type"] for record in corpus_records},
+                {"prompt", "tool_result", "omission"},
+            )
+            self.assertTrue(any(record["truncated"] for record in corpus_records))
+            memory_records = [
+                json.loads(line)
+                for line in (bundle / "memory.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(len(memory_records), 1)
+            self.assertEqual(
+                {message["turn"] for message in memory_records[0]["messages"]}, {2}
+            )
+            self.assertEqual(
+                {
+                    part["type"]
+                    for message in memory_records[0]["messages"]
+                    for part in message["parts"]
+                },
+                {"prompt", "tool_result", "omission"},
+            )
+            self.assertTrue(
+                any(
+                    part["truncated"]
+                    for message in memory_records[0]["messages"]
+                    for part in message["parts"]
+                )
+            )
+            self.assertFalse(
+                any(
+                    "Second answer" in message["content"]
+                    for message in memory_records[0]["messages"]
+                )
+            )
+
+    def test_jsonl_compact_applies_to_corpus_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = make_fixture(Path(tmp) / "fixture")
+            output = Path(tmp) / "output"
+            self.assertEqual(
+                main(
+                    [
+                        "--source",
+                        str(fixture["root"]),
+                        "--output",
+                        str(output),
+                        "--format",
+                        "jsonl",
+                        "--format",
+                        "corpus",
+                        "--jsonl-compact",
+                        "--quiet",
+                    ]
+                ),
+                EXIT_OK,
+            )
+            bundle = first_bundle(output)
+            for filename in ("history.jsonl", "corpus.jsonl"):
+                records = [
+                    json.loads(line)
+                    for line in (bundle / filename).read_text(encoding="utf-8").splitlines()
+                ]
+                headers = [record for record in records if record.get("type") == "session"]
+                parts = [record for record in records if record.get("type") == "part"]
+                self.assertEqual(len(headers), 3)
+                self.assertTrue(parts)
+                self.assertTrue(all("title" in record for record in headers))
+                self.assertTrue(all("title" not in record for record in parts))
+                self.assertTrue(all("workspace" not in record for record in parts))
+
     def test_split_long_markdown_preserves_messages(self) -> None:
         messages = [
             Message("user", "A" * 120, "2023-11-14T00:00:00Z", 1.0),
@@ -1928,6 +2343,12 @@ class CliTests(unittest.TestCase):
                             str(output),
                             "--content",
                             "prompts",
+                            "--format",
+                            "jsonl",
+                            "--format",
+                            "corpus",
+                            "--format",
+                            "memory",
                             "--label",
                             "before-review",
                             "--dry-run",
@@ -1937,8 +2358,10 @@ class CliTests(unittest.TestCase):
                 )
             self.assertFalse(output.exists())
             self.assertIn("_before-review", stdout.getvalue())
-            self.assertIn("metadata.json", stdout.getvalue())
+            self.assertIn("Formats: jsonl, corpus, memory", stdout.getvalue())
             self.assertIn("Planned files:", stdout.getvalue())
+            for filename in ("history.jsonl", "corpus.jsonl", "memory.jsonl", "metadata.json"):
+                self.assertIn(f"  {filename}", stdout.getvalue())
 
     def test_exit_codes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2074,8 +2497,32 @@ class CliTests(unittest.TestCase):
             self.assertEqual(
                 set(capabilities["presets"]), {"conversation", "full"}
             )
-            self.assertIn("jsonl", capabilities["formats"])
+            self.assertEqual(
+                capabilities["formats"],
+                ["markdown", "json", "jsonl", "corpus", "memory"],
+            )
+            self.assertEqual(capabilities["format_files"]["corpus"], "corpus.jsonl")
+            self.assertEqual(capabilities["format_files"]["memory"], "memory.jsonl")
+            self.assertEqual(
+                capabilities["options"]["jsonl_compact"]["requires_any"],
+                ["jsonl", "corpus"],
+            )
+            self.assertNotIn(
+                "requires", capabilities["options"]["jsonl_compact"]
+            )
+            self.assertEqual(
+                capabilities["presets"]["full"]["formats"],
+                ["markdown", "json", "jsonl", "corpus", "memory"],
+            )
             self.assertFalse(capabilities["writes"])
+
+            text_stdout = io.StringIO()
+            with redirect_stdout(text_stdout):
+                self.assertEqual(main(["--capabilities"]), EXIT_OK)
+            self.assertIn(
+                "Formats: markdown, json, jsonl, corpus, memory",
+                text_stdout.getvalue(),
+            )
 
     def test_session_selection_applies_to_export_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -8,7 +8,7 @@ A cross-platform CLI for exporting locally stored GitHub Copilot chats from VS C
 - Combines matching records from available local stores and best-effort prompt history.
 - Preserves inline references in assistant text and exports prompts, answers, reasoning, tool calls/results, edits, and other stored parts as selectable categories.
 - Preserves token-usage data reported by the source.
-- Writes Markdown and JSON per session, or a run-wide JSONL stream of typed parts and per-turn usage records, with a metadata index for each run.
+- Writes Markdown and JSON per session, plus three distinct run-wide products: `history.jsonl` (legacy typed parts), `corpus.jsonl` (flat typed parts and usage), and `memory.jsonl` (one structured record per session), with a metadata index for each run.
 
 An export represents the data the editor persisted and this tool can recognize. Separate prompt history may not be associable with a particular assistant session. Inline references in assistant text are rendered as readable labels to keep the prose flowing; Markdown does not promise to reproduce their full URI or path.
 
@@ -55,9 +55,13 @@ python3 copilot_export.py --help
 python3 copilot_export.py --format markdown
 python3 copilot_export.py --format markdown --format jsonl
 python3 copilot_export.py --format markdown --format json --format jsonl
+python3 copilot_export.py --format corpus
+python3 copilot_export.py --format memory
+python3 copilot_export.py --format jsonl --format corpus --format memory
 
-# Write compact JSONL records with shared session metadata in one header.
+# Write compact flat-stream records with shared session metadata in one header.
 python3 copilot_export.py --format jsonl --jsonl-compact
+python3 copilot_export.py --format corpus --jsonl-compact
 
 # Export a conversation (prompts, answers, and readable reasoning).
 python3 copilot_export.py --conversation
@@ -111,7 +115,7 @@ python3 copilot_export.py --db "/path/to/Code/User/workspaceStorage/<workspace-h
 python3 copilot_export.py --output ./my_export
 ```
 
-Each run gets a new `<UTC timestamp>_<label>` directory under `--output`; numeric suffixes distinguish runs with the same timestamp and label. Markdown and JSON are written per session; JSONL writes one `history.jsonl` stream per run. `--jsonl-compact` changes the JSONL record layout.
+Each run gets a new `<UTC timestamp>_<label>` directory under `--output`; numeric suffixes distinguish runs with the same timestamp and label. Markdown and JSON are written per session. `--format jsonl` writes `history.jsonl`, `--format corpus` writes `corpus.jsonl`, and `--format memory` writes `memory.jsonl`; each flat stream is written once per run. `--jsonl-compact` changes the `history.jsonl` and `corpus.jsonl` record layout, not `memory.jsonl`.
 
 ### Default behavior
 
@@ -175,7 +179,7 @@ The `--conversation` preset selects prompts, answers, and readable stored reason
 
 Excluded tool parts are grouped into inline omission markers by default. `--no-omission-markers` removes those in-message notices; it does not change which content categories are selected, and omission details remain in metadata. Turn-gap notices are unaffected. Omission records use stable message/part indices rather than Markdown line numbers.
 
-Content, turn, and truncation filters are applied before writing, so they affect all selected formats. `--jsonl-compact` changes only the JSONL record layout; it requires JSONL output but can be combined with Markdown or per-session JSON (`--format markdown --format json --format jsonl --jsonl-compact`).
+Content, turn, and truncation filters are applied before writing, so they affect Markdown, per-session JSON, `history.jsonl`, `corpus.jsonl`, and `memory.jsonl` alike. `--jsonl-compact` changes only the `history.jsonl` and `corpus.jsonl` record layout; it requires at least one of `--format jsonl` or `--format corpus` but can be combined with other formats (`--format markdown --format json --format corpus --jsonl-compact`).
 
 Serialized reasoning without readable text is excluded by default; `--include-raw-reasoning` includes it. When omission markers are enabled and reasoning is selected, these exclusions are labeled `serialized_reasoning omitted`. `--max-reasoning-chars` and `--max-tool-output-chars` truncate matching content; `--truncate-direction beginning` keeps the start instead. Truncated structured tool data is emitted as text.
 
@@ -193,7 +197,7 @@ Session selection is recorded under `filters.selection` in `metadata.json` and i
 
 ## Output layouts
 
-Each run gets a timestamped bundle. Markdown and JSON are organized by workspace and session; JSONL is written as one run-wide stream:
+Each run gets a timestamped bundle. Markdown and JSON are organized by workspace and session; `history.jsonl`, `corpus.jsonl`, and `memory.jsonl` are written once per run when selected:
 
 ```text
 export/
@@ -203,13 +207,17 @@ export/
       2026-11-04_session-title.md
       2026-11-04_session-title.json
     history.jsonl
+    corpus.jsonl
+    memory.jsonl
 ```
 
-The workspace folder name uses its latest session date, a readable workspace name, and a short ID. Session filenames use the session date and title.
+The workspace folder name uses its latest session date, a readable workspace name, and a short ID. Session filenames use the session date and title. This workspace grouping is unchanged for Markdown and JSON.
 
 Markdown files contain the conversation and session metadata in YAML frontmatter. Session JSON contains the session and its messages. When reported usage is available, it is included in Markdown frontmatter and JSON session data.
 
-JSONL contains typed content-part records with session, turn, role, timestamp, and content, plus usage records when available. `--jsonl-compact` stores shared session metadata in one header per session. JSONL can feed a downstream RAG ingestion pipeline; chunking, embeddings, and prompt/answer dataset preparation are outside this exporter's scope.
+`history.jsonl` and `corpus.jsonl` both contain the legacy flat layout: typed content-part records with session, turn, role, timestamp, and content, plus usage records when available. `--jsonl-compact` stores shared session metadata in one header per session in either flat stream. These streams can feed a downstream RAG ingestion pipeline; chunking, embeddings, and prompt/answer dataset preparation are outside this exporter's scope.
+
+`memory.jsonl` is a separate product: exactly one structured record per selected root session, with `record_type: "session"`, `subagents: []`, the full `messages` and nested `parts`, source-reported `usage`, workspace, and creation/update times. Current Copilot sources expose no parent session IDs, so no hierarchy is fabricated. `--jsonl-compact` has no effect on this product.
 
 `--split-long-sessions` splits Markdown between complete messages. Set the limit with either `--max-session-md-bytes` (default: 1,000,000) or `--max-session-md-mb`; a message larger than the limit remains intact.
 
@@ -233,7 +241,7 @@ Argument parsing failures also use exit code `2`. When `--json` is used with `--
 
 `--list-sessions --json` adds `sessions_found` and a `sessions` array. Each session record contains `id`, `title`, `created`, `updated`, canonical UTC `created_at` and `updated_at`, `revision`, `workspace`, `workspace_id`, `agent`, `source`, `source_file`, `message_count`, and `turn_count`. `created`/`updated` remain compatibility aliases. `revision` is derived from the session's `updated_ts` and is intended for change-aware launchers; use `updated_at` for display and ordering. It is a listing field, not a per-session field in the export bundle's `metadata.json`. The bundle metadata records canonical `created_at` and `updated_at` values in `session_records`. Session filenames use their UTC last-updated date as a prefix; run folders use UTC `YYYYMMDDTHHMMSSZ` stamps.
 
-`--capabilities --json` reports supported content categories, formats, presets, and option requirements without reading local chat data.
+`--capabilities --json` reports supported content categories, formats (`markdown`, `json`, `jsonl`, `corpus`, `memory`), their output file names, presets, and option requirements without reading local chat data. `--jsonl-compact` uses `requires_any: ["jsonl", "corpus"]`, meaning at least one of those formats must be selected; `requires` remains reserved for single-format requirements.
 
 ## Verification and roadmap
 
@@ -245,6 +253,7 @@ Tests use synthetic fixtures; they verify parser and discovery behavior but do n
 
 - [x] Hybrid SQLite and JSONL collection.
 - [x] Isolated, timestamped bundles for Markdown, JSON, and structured JSONL exports.
+- [x] Distinct `history.jsonl`, `corpus.jsonl`, and `memory.jsonl` products with shared filtering and run metadata.
 - [x] Turn, content, reasoning, tool-output, and truncation controls with truthful metadata.
 - [x] Readable workspace/session names with a short collision-safe identifier.
 - [x] Isolated per-run bundles, compact JSONL, progress reporting, and message-safe Markdown splitting.

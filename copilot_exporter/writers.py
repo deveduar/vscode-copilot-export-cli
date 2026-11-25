@@ -15,6 +15,11 @@ from .progress import Progress
 
 METADATA_NAME = "metadata.json"
 DEFAULT_MAX_SESSION_MD_BYTES = 1_000_000
+STREAM_FILES = {
+    "jsonl": "history.jsonl",
+    "corpus": "corpus.jsonl",
+    "memory": "memory.jsonl",
+}
 
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WINDOWS_RESERVED = {
@@ -449,17 +454,53 @@ def _write_jsonl_bundle(
     options: WriteOptions,
     result: RunResult,
     progress: Optional[Progress] = None,
+    filename: str = "history.jsonl",
 ) -> None:
     """Write a single JSONL stream for this export run."""
 
-    target = options.output / "history.jsonl"
+    target = options.output / filename
     _write_text(target, _jsonl_document(sessions, workspaces, options.jsonl_compact))
     relative = _relative(target, options.output)
     result.written_files.append(relative)
     for session in sessions:
         result.session_files.setdefault(session.session_id, []).append(relative)
     if progress is not None:
-        progress.step("history.jsonl")
+        progress.step(filename)
+
+
+def _memory_document(
+    sessions: List[Session],
+    workspaces: Dict[str, Any],
+) -> str:
+    records: List[Dict[str, Any]] = []
+    for session in sessions:
+        record = session.as_dict(_workspace_label(session, workspaces))
+        record["record_type"] = "session"
+        record["subagents"] = []
+        record.setdefault("usage", [])
+        records.append(record)
+    lines = [
+        json.dumps(record, ensure_ascii=False, sort_keys=True) for record in records
+    ]
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _write_memory_bundle(
+    sessions: List[Session],
+    workspaces: Dict[str, Any],
+    options: WriteOptions,
+    result: RunResult,
+    progress: Optional[Progress] = None,
+) -> None:
+    filename = STREAM_FILES["memory"]
+    target = options.output / filename
+    _write_text(target, _memory_document(sessions, workspaces))
+    relative = _relative(target, options.output)
+    result.written_files.append(relative)
+    for session in sessions:
+        result.session_files.setdefault(session.session_id, []).append(relative)
+    if progress is not None:
+        progress.step(filename)
 
 
 def plan_outputs(
@@ -469,7 +510,14 @@ def plan_outputs(
 ) -> List[str]:
     """Return all bundle-relative paths that an export run will write."""
 
-    formats = [fmt for fmt in options.formats if fmt != "jsonl"]
+    formats = [
+        fmt for fmt in dict.fromkeys(options.formats) if fmt not in STREAM_FILES
+    ]
+    stream_files = [
+        STREAM_FILES[fmt]
+        for fmt in dict.fromkeys(options.formats)
+        if fmt in STREAM_FILES
+    ]
     planned: List[str] = []
     workspace_folders = _workspace_folders(sessions, workspaces or {})
     bases = _unique_bases(sessions, workspace_folders)
@@ -490,8 +538,7 @@ def plan_outputs(
                     )
                     continue
             planned.append(f"{folder}/{base}.{fmt}")
-    if "jsonl" in options.formats:
-        planned.append("history.jsonl")
+    planned.extend(stream_files)
     planned.append(METADATA_NAME)
     return planned
 
@@ -543,10 +590,10 @@ def write_exports(
     if not sessions:
         return result
 
-    session_formats = tuple(fmt for fmt in options.formats if fmt != "jsonl")
-    progress_total = (len(sessions) if session_formats else 0) + int(
-        "jsonl" in options.formats
-    )
+    ordered_formats = tuple(dict.fromkeys(options.formats))
+    session_formats = tuple(fmt for fmt in ordered_formats if fmt not in STREAM_FILES)
+    stream_formats = tuple(fmt for fmt in ordered_formats if fmt in STREAM_FILES)
+    progress_total = (len(sessions) if session_formats else 0) + len(stream_formats)
     if progress is not None:
         progress.start("Writing exports", total=progress_total)
 
@@ -596,8 +643,18 @@ def write_exports(
                         result.written_files.append(relative)
                         session_files.append(relative)
 
-        if "jsonl" in options.formats:
-            _write_jsonl_bundle(sessions, workspaces, options, result, progress)
+        for fmt in stream_formats:
+            if fmt == "memory":
+                _write_memory_bundle(sessions, workspaces, options, result, progress)
+            else:
+                _write_jsonl_bundle(
+                    sessions,
+                    workspaces,
+                    options,
+                    result,
+                    progress,
+                    filename=STREAM_FILES[fmt],
+                )
         return result
     finally:
         if progress is not None:

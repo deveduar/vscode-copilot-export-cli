@@ -39,6 +39,9 @@ EXIT_OK = 0
 EXIT_SOURCE_ERROR = 1
 EXIT_NO_DATA = 2
 
+FORMAT_CHOICES = ("markdown", "json", "jsonl", "corpus", "memory")
+JSONL_COMPACT_FORMATS = ("jsonl", "corpus")
+
 CONTENT_DESCRIPTIONS = {
     "prompts": "User requests.",
     "answers": "Rendered assistant responses.",
@@ -71,6 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  copilot-export\n"
             "  copilot-export --format markdown\n"
             "  copilot-export --format jsonl --jsonl-compact\n"
+            "  copilot-export --format corpus --jsonl-compact\n"
+            "  copilot-export --format memory\n"
             "  copilot-export --format json --format jsonl\n"
             "  copilot-export --turns 1-10 --content prompts --content answers\n"
             "  copilot-export --last-turns 3 --format markdown\n"
@@ -121,16 +126,20 @@ def build_parser() -> argparse.ArgumentParser:
         "-f",
         "--format",
         action="append",
-        choices=("markdown", "json", "jsonl"),
+        choices=FORMAT_CHOICES,
         dest="formats",
-        help="Output format; repeat to write multiple formats. Defaults to markdown and json.",
+        help=(
+            "Output format; repeat to write multiple formats. corpus writes a flat "
+            "typed-part stream, memory writes one structured record per session, "
+            "and jsonl writes history.jsonl. Defaults to markdown and json."
+        ),
     )
     parser.add_argument(
         "--jsonl-compact",
         action="store_true",
         help=(
-            "Write JSONL with one session header and omit repeated session metadata "
-            "from part/usage records (requires JSONL output)."
+            "Write a flat stream with one session header and omit repeated session "
+            "metadata from part/usage records (requires --format jsonl or --format corpus)."
         ),
     )
     parser.add_argument(
@@ -487,7 +496,14 @@ def _capabilities_payload() -> Dict[str, object]:
         "tool": "copilot_export",
         "version": __version__,
         "writes": False,
-        "formats": ["markdown", "json", "jsonl"],
+        "formats": list(FORMAT_CHOICES),
+        "format_files": {
+            "markdown": "per-session .md",
+            "json": "per-session .json",
+            "jsonl": "history.jsonl",
+            "corpus": "corpus.jsonl",
+            "memory": "memory.jsonl",
+        },
         "content": [
             {"name": name, "description": CONTENT_DESCRIPTIONS[name]}
             for name in CONTENT_TYPES
@@ -504,7 +520,7 @@ def _capabilities_payload() -> Dict[str, object]:
             "full": {
                 "native": False,
                 "content": list(CONTENT_TYPES),
-                "formats": ["markdown", "json", "jsonl"],
+                "formats": list(FORMAT_CHOICES),
                 "description": (
                     "Most inclusive supported bundle; launchers compose it from "
                     "all content categories and formats."
@@ -513,10 +529,10 @@ def _capabilities_payload() -> Dict[str, object]:
         },
         "options": {
             "jsonl_compact": {
-                "requires": ["jsonl"],
+                "requires_any": list(JSONL_COMPACT_FORMATS),
                 "description": (
-                    "Share session metadata in one header per session; it only "
-                    "changes JSONL and can be combined with Markdown or JSON."
+                    "Share session metadata in one header per session; requires at "
+                    "least one of jsonl or corpus and changes only those flat streams."
                 ),
             },
             "split_long_sessions": {
@@ -589,9 +605,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     requested_formats = args.formats or ["markdown", "json"]
     formats = tuple("md" if fmt == "markdown" else fmt for fmt in requested_formats)
     formats = tuple(dict.fromkeys(formats))
-    if not read_only and args.jsonl_compact and "jsonl" not in formats:
+    if (
+        not read_only
+        and args.jsonl_compact
+        and not any(fmt in JSONL_COMPACT_FORMATS for fmt in formats)
+    ):
         parser.error(
-            "--jsonl-compact requires JSONL output; use --format jsonl"
+            "--jsonl-compact requires a flat stream; use --format jsonl or --format corpus"
         )
 
     try:
